@@ -127,9 +127,9 @@ const char *DetectListToHumanString(int list)
     return "unknown";
 }
 
-#define CASE_CODE(E)  case E: return #E
 const char *DetectListToString(int list)
 {
+#define CASE_CODE(E)  case E: return #E
     switch (list) {
         CASE_CODE(DETECT_SM_LIST_MATCH);
         CASE_CODE(DETECT_SM_LIST_PMATCH);
@@ -139,6 +139,7 @@ const char *DetectListToString(int list)
         CASE_CODE(DETECT_SM_LIST_THRESHOLD);
         CASE_CODE(DETECT_SM_LIST_MAX);
     }
+#undef CASE_CODE
     return "unknown";
 }
 

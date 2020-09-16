@@ -174,6 +174,7 @@
 #include "detect-app-layer-protocol.h"
 #include "detect-template.h"
 #include "detect-template2.h"
+#include "detect-time.h"
 #include "detect-tcphdr.h"
 #include "detect-tcpmss.h"
 #include "detect-udphdr.h"
@@ -580,6 +581,7 @@ void SigTableSetup(void)
     DetectBase64DataRegister();
     DetectTemplateRegister();
     DetectTemplate2Register();
+    DetectTimeRegister();
     DetectTcphdrRegister();
     DetectUdphdrRegister();
     DetectTcpmssRegister();
