@@ -1392,6 +1392,8 @@ static int DetectEngineInspectRulePacketMatches(
     SCLogDebug("running match functions, sm %p", smd);
     while (1) {
         KEYWORD_PROFILING_START;
+        // Here we inspect the packet and find if it matches!
+        // Note that there are other kinds of matches as well.
         if (sigmatch_table[smd->type].Match(det_ctx, p, s, smd->ctx) <= 0) {
             KEYWORD_PROFILING_END(det_ctx, smd->type, 0);
             SCLogDebug("no match");

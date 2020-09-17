@@ -18,12 +18,13 @@
 /**
  * \file
  *
- * \author XXX
+ * \author Michael
  *
  */
 
 #include "suricata-common.h"
 #include "util-byte.h"
+#include "util-time.h"
 
 #include "detect.h"
 #include "detect-parse.h"
@@ -33,8 +34,10 @@
 
 /**
  * \brief Regex for parsing our options
+ *
+ * Matches an assertion about the time. For example: "< 13.34"
  */
-#define PARSE_REGEX  "^\\s*([0-9]*)?\\s*([<>=-]+)?\\s*([0-9]+)?\\s*$"
+#define PARSE_REGEX  "^\\s*([<>])\\s*([0-9]{0,2}):([0-2]{0,2})\\s*$"
 
 static DetectParseRegex parse_regex;
 
@@ -55,13 +58,22 @@ static bool PrefilterTimeIsPrefilterable(const Signature *s);
 
 void DetectTimeRegister(void)
 {
+    // Don't think this is used for lookup or anything, just logging
     sigmatch_table[DETECT_TIME].name = "time";
+    // Description, just metadata, nothing too important
     sigmatch_table[DETECT_TIME].desc = "TODO describe the keyword";
+    // about 0 clue what this does, TODO
     sigmatch_table[DETECT_TIME].url = "/rules/header-keywords.html#time";
+    // registry - function for matching 
     sigmatch_table[DETECT_TIME].Match = DetectTimeMatch;
+    // this is where we get to parse the actual rule(s)
+    // TODO - is this called 1x per RULE that has a time: assertion?
+    // performance concerns might be more important than initially presumed...
     sigmatch_table[DETECT_TIME].Setup = DetectTimeSetup;
+    // pretty simple free function
     sigmatch_table[DETECT_TIME].Free = DetectTimeFree;
 #ifdef UNITTESTS
+    // need to make sure to make unit tests TODO
     sigmatch_table[DETECT_TIME].RegisterTests = DetectTimeRegisterTests;
 #endif
     sigmatch_table[DETECT_TIME].SupportsPrefilter = PrefilterTimeIsPrefilterable;
@@ -71,16 +83,22 @@ void DetectTimeRegister(void)
     return;
 }
 
-static inline int TimeMatch(const uint8_t parg, const uint8_t mode,
-        const uint8_t darg1, const uint8_t darg2)
+static inline int TimeMatch(const uint16_t const_minutes, const uint8_t mode, const uint16_t day_minutes)
 {
-    if (mode == DETECT_TIME_EQ && parg == darg1)
+    // Rationale: SCLocalTime returns floor(minutes)
+    // <= here would include up to a minute of incorrect times.
+    if (mode == DETECT_TIME_LT && day_minutes < const_minutes)
         return 1;
-    else if (mode == DETECT_TIME_LT && parg < darg1)
-        return 1;
-    else if (mode == DETECT_TIME_GT && parg > darg1)
-        return 1;
-    else if (mode == DETECT_TIME_RA && (parg > darg1 && parg < darg2))
+    // > here would not include a minute of incorrect times.
+    // Furthermore, it should be possible to match on the exact time.
+    // The alternative would be to allow for <=, >=, which is still a 
+    // potentially viable addition, just not worth it for current testing,
+    // especially considering the implications of (x minutes = some value) -
+    // would it only match when there is a 0s0ms offset, or when the minute matches?
+    // The former is quite unlikely, whereas the latter is functionally identical
+    // to the current implementation, but for an - again - fairly unlikely chance.
+    // The tradeoff here is API simplicity for potential confusion regarding the implementation.
+    else if (mode == DETECT_TIME_GT && day_minutes >= const_minutes)
         return 1;
 
     return 0;
@@ -100,23 +118,25 @@ static inline int TimeMatch(const uint8_t parg, const uint8_t mode,
 static int DetectTimeMatch (DetectEngineThreadCtx *det_ctx, Packet *p,
         const Signature *s, const SigMatchCtx *ctx)
 {
-
+    // TODO what in the world is a pseudopacket
     if (PKT_IS_PSEUDOPKT(p))
         return 0;
 
-    /* TODO replace this */
-    uint8_t ptime;
-    if (PKT_IS_IPV4(p)) {
-        ptime = IPV4_GET_IPTTL(p);
-    } else if (PKT_IS_IPV6(p)) {
-        ptime = IPV6_GET_HLIM(p);
-    } else {
-        SCLogDebug("Packet is of not IPv4 or IPv6");
-        return 0;
-    }
-
     const DetectTimeData *timed = (const DetectTimeData *)ctx;
-    return TimeMatch(ptime, timed->mode, timed->arg1, timed->arg2);
+
+    // For now, we can get this information inside of the match function
+    // It would be wise to instead get it earlier (when the packet is actually
+    // received by the engine)
+    struct timeval tval;
+
+    TimeGet(&tval);
+    struct tm local_tm;
+    // Caching, fewer locks, internal method.
+    SCLocalTime(tval.tv_sec, &local_tm);
+    SCLogError(SC_ERR_PCRE_MATCH, "tried to match");
+    uint16_t day_minutes = local_tm.tm_min + (local_tm.tm_hour * 60);
+
+    return TimeMatch(timed->minutes, timed->mode, day_minutes);
 }
 
 /**
@@ -131,14 +151,14 @@ static int DetectTimeMatch (DetectEngineThreadCtx *det_ctx, Packet *p,
 static DetectTimeData *DetectTimeParse (const char *timestr)
 {
     DetectTimeData *timed = NULL;
-    char *arg1 = NULL;
-    char *arg2 = NULL;
-    char *arg3 = NULL;
+    char *arg_operator = NULL;
+    char *arg_hours = NULL;
+    char *arg_minutes = NULL;
     int ret = 0, res = 0;
     int ov[MAX_SUBSTRINGS];
 
     ret = DetectParsePcreExec(&parse_regex, timestr, 0, 0, ov, MAX_SUBSTRINGS);
-    if (ret < 2 || ret > 4) {
+    if (ret != 4) {
         SCLogError(SC_ERR_PCRE_MATCH, "parse error, ret %" PRId32 "", ret);
         goto error;
     }
@@ -149,134 +169,65 @@ static DetectTimeData *DetectTimeParse (const char *timestr)
         SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
         goto error;
     }
-    arg1 = (char *) str_ptr;
-    SCLogDebug("Arg1 \"%s\"", arg1);
+    arg_operator = (char *) str_ptr;
+    SCLogDebug("Argument - Operator: \"%s\"", arg_operator);
 
-    if (ret >= 3) {
-        res = pcre_get_substring((char *) timestr, ov, MAX_SUBSTRINGS, 2, &str_ptr);
-        if (res < 0) {
-            SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-            goto error;
-        }
-        arg2 = (char *) str_ptr;
-        SCLogDebug("Arg2 \"%s\"", arg2);
-
-        if (ret >= 4) {
-            res = pcre_get_substring((char *) timestr, ov, MAX_SUBSTRINGS, 3, &str_ptr);
-            if (res < 0) {
-                SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
-                goto error;
-            }
-            arg3 = (char *) str_ptr;
-            SCLogDebug("Arg3 \"%s\"", arg3);
-        }
+    res = pcre_get_substring((char *) timestr, ov, MAX_SUBSTRINGS, 2, &str_ptr);
+    if (res < 0) {
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+        goto error;
     }
+    arg_hours = (char *) str_ptr;
+    SCLogDebug("Argument - Hours: \"%s\"", arg_hours);
+
+    res = pcre_get_substring((char *) timestr, ov, MAX_SUBSTRINGS, 3, &str_ptr);
+    if (res < 0) {
+        SCLogError(SC_ERR_PCRE_GET_SUBSTRING, "pcre_get_substring failed");
+        goto error;
+    }
+    arg_minutes = (char *) str_ptr;
+    SCLogDebug("Argument - Minutes: \"%s\"", arg_minutes);
 
     timed = SCMalloc(sizeof (DetectTimeData));
     if (unlikely(timed == NULL))
         goto error;
-    timed->arg1 = 0;
-    timed->arg2 = 0;
 
-    if (arg2 != NULL) {
-        /*set the values*/
-        switch(arg2[0]) {
-            case '<':
-                if (arg3 == NULL)
-                    goto error;
+    timed->minutes = 0;
+    timed->mode = 0;
 
-                timed->mode = DETECT_TIME_LT;
-                if (StringParseUint8(&timed->arg1, 10, 0, (const char *)arg3) < 0) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid first arg:"
-                               " \"%s\"", arg3);
-                    goto error;
-                }
-                SCLogDebug("time is %"PRIu8"",timed->arg1);
-                if (strlen(arg1) > 0)
-                    goto error;
+    if (arg_operator[0] == '>') timed->mode = DETECT_TIME_GT;
+    if (arg_operator[0] == '<') timed->mode = DETECT_TIME_LT;
 
-                break;
-            case '>':
-                if (arg3 == NULL)
-                    goto error;
-
-                timed->mode = DETECT_TIME_GT;
-                if (StringParseUint8(&timed->arg1, 10, 0, (const char *)arg3) < 0) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid first arg:"
-                               " \"%s\"", arg3);
-                    goto error;
-                }
-                SCLogDebug("time is %"PRIu8"",timed->arg1);
-                if (strlen(arg1) > 0)
-                    goto error;
-
-                break;
-            case '-':
-                if (arg1 == NULL || strlen(arg1)== 0)
-                    goto error;
-                if (arg3 == NULL || strlen(arg3)== 0)
-                    goto error;
-
-                timed->mode = DETECT_TIME_RA;
-                if (StringParseUint8(&timed->arg1, 10, 0, (const char *)arg1) < 0) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid first arg:"
-                               " \"%s\"", arg1);
-                    goto error;
-                }
-                if (StringParseUint8(&timed->arg2, 10, 0, (const char *)arg3) < 0) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid second arg:"
-                               " \"%s\"", arg3);
-                    goto error;
-                }
-                SCLogDebug("time is %"PRIu8" to %"PRIu8"",timed->arg1, timed->arg2);
-                if (timed->arg1 >= timed->arg2) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid time range. ");
-                    goto error;
-                }
-                break;
-            default:
-                timed->mode = DETECT_TIME_EQ;
-
-                if ((arg2 != NULL && strlen(arg2) > 0) ||
-                    (arg3 != NULL && strlen(arg3) > 0) ||
-                    (arg1 == NULL ||strlen(arg1) == 0))
-                    goto error;
-
-                if (StringParseUint8(&timed->arg1, 10, 0, (const char *)arg1) < 0) {
-                    SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid first arg:"
-                               " \"%s\"", arg1);
-                    goto error;
-                }
-                break;
-        }
-    } else {
-        timed->mode = DETECT_TIME_EQ;
-
-        if ((arg3 != NULL && strlen(arg3) > 0) ||
-            (arg1 == NULL ||strlen(arg1) == 0))
-            goto error;
-
-        if (StringParseUint8(&timed->arg1, 10, 0, (const char *)arg1) < 0) {
-            SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid first arg:"
-                       " \"%s\"", arg1);
-            goto error;
-        }
+    // Do I need a nullcheck for arg_hours, arg_minutes?
+    // Reference code seemed to imply this, but manpage doesn't
+    // give any mention of null returns.
+    uint16_t hours = 0;
+    uint16_t minutes = 0;
+    if (StringParseUint16(&hours, 10, 0, (const char *)arg_hours) < 0) {
+        SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid first arg:"
+                   " \"%s\"", arg_hours);
+        goto error;
     }
-
-    SCFree(arg1);
-    SCFree(arg2);
-    SCFree(arg3);
+    if (StringParseUint16(&minutes, 10, 0, (const char *)arg_minutes) < 0) {
+        SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid first arg:"
+                   " \"%s\"", arg_minutes);
+        goto error;
+    }
+    timed->minutes = (hours * 60) + minutes;
+    SCFree(arg_operator);
+    SCFree(arg_hours);
+    SCFree(arg_minutes);
     return timed;
 
 error:
     if (timed)
         SCFree(timed);
-    if (arg1)
-        SCFree(arg1);
-    if (arg2)
-        SCFree(arg2);
-    if (arg3)
-        SCFree(arg3);
+    if (arg_operator)
+        SCFree(arg_operator);
+    if (arg_hours)
+        SCFree(arg_hours);
+    if (arg_minutes)
+        SCFree(arg_minutes);
     return NULL;
 }
 
@@ -347,23 +298,15 @@ PrefilterPacketTimeMatch(DetectEngineThreadCtx *det_ctx, Packet *p, const void *
     const PrefilterPacketHeaderCtx *ctx = pectx;
     if (PrefilterPacketHeaderExtraMatch(ctx, p) == FALSE)
         return;
-
-    /* if we match, add all the sigs that use this prefilter. This means
-     * that these will be inspected further */
-    if (TimeMatch(ptime, ctx->v1.u8[0], ctx->v1.u8[1], ctx->v1.u8[2]))
-    {
-        SCLogDebug("packet matches time/hl %u", ptime);
-        PrefilterAddSids(&det_ctx->pmq, ctx->sigs_array, ctx->sigs_cnt);
-    }
 }
 
+// Not sure what these do, TODO
 static void
 PrefilterPacketTimeSet(PrefilterPacketHeaderValue *v, void *smctx)
 {
     const DetectTimeData *a = smctx;
     v->u8[0] = a->mode;
-    v->u8[1] = a->arg1;
-    v->u8[2] = a->arg2;
+    v->u16[0] = a->minutes;
 }
 
 static bool
@@ -371,8 +314,7 @@ PrefilterPacketTimeCompare(PrefilterPacketHeaderValue v, void *smctx)
 {
     const DetectTimeData *a = smctx;
     if (v.u8[0] == a->mode &&
-        v.u8[1] == a->arg1 &&
-        v.u8[2] == a->arg2)
+        v.u16[0] == a->minutes)
         return TRUE;
     return FALSE;
 }

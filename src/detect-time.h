@@ -18,21 +18,17 @@
 /**
  * \file
  *
- * \author XXX
+ * \author Michael
  */
 
 #ifndef _DETECT_TIME_H
 #define	_DETECT_TIME_H
 
 #define DETECT_TIME_LT   0   /**< "less than" operator */
-#define DETECT_TIME_EQ   1   /**< "equals" operator (default) */
-#define DETECT_TIME_GT   2   /**< "greater than" operator */
-#define DETECT_TIME_RA   3   /**< "range" operator */
+#define DETECT_TIME_GT   1   /**< "greater than" operator */
 
 typedef struct DetectTimeData_ {
-    uint8_t arg1;   /**< first arg value in the signature*/
-    uint8_t arg2;   /**< second arg value in the signature, in case of range
-                         operator*/
+    uint16_t minutes;   /**< hours argument used in the signature*/
     uint8_t mode;   /**< operator used in the signature */
 } DetectTimeData;
 
