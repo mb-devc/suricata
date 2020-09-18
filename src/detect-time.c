@@ -49,8 +49,6 @@ void DetectTimeFree (DetectEngineCtx *, void *);
 #ifdef UNITTESTS
 void DetectTimeRegisterTests (void);
 #endif
-static int PrefilterSetupTime(DetectEngineCtx *de_ctx, SigGroupHead *sgh);
-static bool PrefilterTimeIsPrefilterable(const Signature *s);
 
 /**
  * \brief Registration function for time: keyword
@@ -58,26 +56,15 @@ static bool PrefilterTimeIsPrefilterable(const Signature *s);
 
 void DetectTimeRegister(void)
 {
-    // Don't think this is used for lookup or anything, just logging
     sigmatch_table[DETECT_TIME].name = "time";
-    // Description, just metadata, nothing too important
     sigmatch_table[DETECT_TIME].desc = "TODO describe the keyword";
-    // about 0 clue what this does, TODO
     sigmatch_table[DETECT_TIME].url = "/rules/header-keywords.html#time";
-    // registry - function for matching 
     sigmatch_table[DETECT_TIME].Match = DetectTimeMatch;
-    // this is where we get to parse the actual rule(s)
-    // TODO - is this called 1x per RULE that has a time: assertion?
-    // performance concerns might be more important than initially presumed...
     sigmatch_table[DETECT_TIME].Setup = DetectTimeSetup;
-    // pretty simple free function
     sigmatch_table[DETECT_TIME].Free = DetectTimeFree;
 #ifdef UNITTESTS
-    // need to make sure to make unit tests TODO
     sigmatch_table[DETECT_TIME].RegisterTests = DetectTimeRegisterTests;
 #endif
-    sigmatch_table[DETECT_TIME].SupportsPrefilter = PrefilterTimeIsPrefilterable;
-    sigmatch_table[DETECT_TIME].SetupPrefilter = PrefilterSetupTime;
 
     DetectSetupParseRegexes(PARSE_REGEX, &parse_regex);
     return;
@@ -201,6 +188,8 @@ static DetectTimeData *DetectTimeParse (const char *timestr)
     // Do I need a nullcheck for arg_hours, arg_minutes?
     // Reference code seemed to imply this, but manpage doesn't
     // give any mention of null returns.
+    // Seems like a no. If we don't match, we never hit this code. It seems 
+    // like an empty match gives "\0"
     uint16_t hours = 0;
     uint16_t minutes = 0;
     if ((arg_hours[0] != '\0') && StringParseUint16(&hours, 10, 0, (const char *)arg_hours) < 0) {
@@ -271,72 +260,6 @@ void DetectTimeFree(DetectEngineCtx *de_ctx, void *ptr)
 {
     DetectTimeData *timed = (DetectTimeData *)ptr;
     SCFree(timed);
-}
-
-/* prefilter code */
-
-static void
-PrefilterPacketTimeMatch(DetectEngineThreadCtx *det_ctx, Packet *p, const void *pectx)
-{
-    if (PKT_IS_PSEUDOPKT(p)) {
-        SCReturn;
-    }
-
-    uint8_t ptime;
-/* TODO update */
-    if (PKT_IS_IPV4(p)) {
-        ptime = IPV4_GET_IPTTL(p);
-    } else if (PKT_IS_IPV6(p)) {
-        ptime = IPV6_GET_HLIM(p);
-    } else {
-        SCLogDebug("Packet is of not IPv4 or IPv6");
-        return;
-    }
-
-    /* during setup Suricata will automatically see if there is another
-     * check that can be added: alproto, sport or dport */
-    const PrefilterPacketHeaderCtx *ctx = pectx;
-    if (PrefilterPacketHeaderExtraMatch(ctx, p) == FALSE)
-        return;
-}
-
-// Not sure what these do, TODO
-static void
-PrefilterPacketTimeSet(PrefilterPacketHeaderValue *v, void *smctx)
-{
-    const DetectTimeData *a = smctx;
-    v->u8[0] = a->mode;
-    v->u16[0] = a->minutes;
-}
-
-static bool
-PrefilterPacketTimeCompare(PrefilterPacketHeaderValue v, void *smctx)
-{
-    const DetectTimeData *a = smctx;
-    if (v.u8[0] == a->mode &&
-        v.u16[0] == a->minutes)
-        return TRUE;
-    return FALSE;
-}
-
-static int PrefilterSetupTime(DetectEngineCtx *de_ctx, SigGroupHead *sgh)
-{
-    return PrefilterSetupPacketHeader(de_ctx, sgh, DETECT_TIME,
-            PrefilterPacketTimeSet,
-            PrefilterPacketTimeCompare,
-            PrefilterPacketTimeMatch);
-}
-
-static bool PrefilterTimeIsPrefilterable(const Signature *s)
-{
-    const SigMatch *sm;
-    for (sm = s->init_data->smlists[DETECT_SM_LIST_MATCH] ; sm != NULL; sm = sm->next) {
-        switch (sm->type) {
-            case DETECT_TIME:
-                return TRUE;
-        }
-    }
-    return FALSE;
 }
 
 #ifdef UNITTESTS
