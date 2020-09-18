@@ -37,7 +37,7 @@
  *
  * Matches an assertion about the time. For example: "< 13.34"
  */
-#define PARSE_REGEX  "^\\s*([<>])\\s*([0-9]{0,2}):([0-2]{0,2})\\s*$"
+#define PARSE_REGEX  "^\\s*([<>])\\s*([0-9]{0,2}):([0-9]{0,2})\\s*$"
 
 static DetectParseRegex parse_regex;
 
@@ -203,12 +203,12 @@ static DetectTimeData *DetectTimeParse (const char *timestr)
     // give any mention of null returns.
     uint16_t hours = 0;
     uint16_t minutes = 0;
-    if (StringParseUint16(&hours, 10, 0, (const char *)arg_hours) < 0) {
+    if ((arg_hours[0] != '\0') && StringParseUint16(&hours, 10, 0, (const char *)arg_hours) < 0) {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid first arg:"
                    " \"%s\"", arg_hours);
         goto error;
     }
-    if (StringParseUint16(&minutes, 10, 0, (const char *)arg_minutes) < 0) {
+    if ((arg_minutes[0] != '\0') && StringParseUint16(&minutes, 10, 0, (const char *)arg_minutes) < 0) {
         SCLogError(SC_ERR_INVALID_SIGNATURE, "Invalid first arg:"
                    " \"%s\"", arg_minutes);
         goto error;
